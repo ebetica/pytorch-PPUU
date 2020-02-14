@@ -53,10 +53,15 @@ def draw_text(screen, text, xy, font_size=30, colour=(255, 255, 255), font=None)
     screen.blit(text, text_rect)
 
 
-def draw_rect(screen, colour, rect, direction=(1, 0), thickness=0):
+def rect_coords(rect, direction=(1,0)):
     x, y, l, w = rect
     xy = np.array(((x, y - w/2), (x, y + w/2), (x + l, y + w/2), (x + l, y - w/2)))
     c, s = direction
     rot = np.array(((c, -s), (s, c)))
     xy = (rot @ (xy - (x, y)).T).T + (x, y)
+    return xy
+
+
+def draw_rect(screen, colour, rect, direction=(1, 0), thickness=0):
+    xy = rect_coords(rect, direction)
     return pygame.draw.polygon(screen, colour, xy, thickness)
