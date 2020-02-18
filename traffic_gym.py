@@ -34,7 +34,7 @@ SCALE = LANE_W / 3.7  # pixels per metre
 
 STATE_C = 3
 STATE_H, STATE_W = 117, 24
-STATE_D = 4
+STATE_D = 8
 
 colours = {
     'w': (255, 255, 255),
@@ -133,11 +133,15 @@ class Car:
         return text, text_rect
 
     def get_state(self):
-        state = torch.zeros(4)
+        state = torch.zeros(STATE_D)
         state[0] = self._position[0]  # x
         state[1] = self._position[1]  # y
         state[2] = self._direction[0] * self._speed  # dx/dt
         state[3] = self._direction[1] * self._speed  # dy/dt
+        state[4] = self._direction[0] # direction x
+        state[5] = self._direction[1] # direction y
+        state[6] = self._length
+        state[7] = self._width
         return state
 
     def compute_cost(self, other):
@@ -157,9 +161,8 @@ class Car:
 
     def _get_obs(self, left_vehicles, mid_vehicles, right_vehicles):
         n_cars = 1 + 6  # this car + 6 neighbors
-        obs = torch.zeros(n_cars, 2, 2)
+        obs = torch.zeros(n_cars, STATE_D)
         mask = torch.zeros(n_cars)
-        obs = obs.view(n_cars, 4)
         cost = 0
 
         v_state = self.get_state()
@@ -493,7 +496,6 @@ class Car:
             pygame.image.tostring(subsurface, 'RGB', False)
         )
         im = transform.apply_to_image(orig)
-        im.show()
 
         lane_transform = ego_transform(scale=1, crop=[self._length, self.LANE_W])
         lanes = np.asarray(lane_transform.apply_to_image(orig))[:, :, 0]
@@ -767,8 +769,8 @@ class Simulator(core.Env):
         images.div_(255.0)
         bsize = images.size(0)
 
-        states -= s_mean.view(1, 1, 4).expand(states.size())
-        states /= (1e-8 + s_std.view(1, 1, 4).expand(states.size()))
+        states -= s_mean.view(1, 1, STATE_D).expand(states.size())
+        states /= (1e-8 + s_std.view(1, 1, STATE_D).expand(states.size()))
 
         images = images.float()
         states = states.float()
@@ -860,7 +862,7 @@ class Simulator(core.Env):
                     state_image, state_raw = v.get_last(10)
                     v.update = 1
                 else:
-                    state_image, state_raw = torch.zeros(10, 3, 117, 24), torch.zeros(10, 4)
+                    state_image, state_raw = torch.zeros(10, 3, 117, 24), torch.zeros(10, STATE_D)
                     v.update = 0
 
                 states_images.append(state_image.float())
