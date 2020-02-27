@@ -53,6 +53,26 @@ def draw_text(screen, text, xy, font_size=30, colour=(255, 255, 255), font=None)
     screen.blit(text, text_rect)
 
 
+def batch_rect_coords(coords: np.ndarray):
+    # coords are [x, y, l, w, dirx, diry]
+
+    x = coords[:, 0]
+    y = coords[:, 1]
+    l = coords[:, 2]
+    w = coords[:, 3]
+    cs = coords[:, 4:6]
+
+    def com(x, y):
+        return np.stack([x, y], axis=1)[:, np.newaxis, :]
+    xy = np.concatenate([com(x, y - w/2), com(x, y + w/2), com(x + l, y + w/2), com(x + l, y - w/2)], axis=1)[:, :, :, np.newaxis]
+    oldxy = np.stack([x, y], axis=1)[:, np.newaxis, :, np.newaxis]
+    assert xy.ndim == 4
+    assert tuple(xy.shape) == (coords.shape[0], 4, 2, 1)
+
+    rot = np.stack([cs * np.asarray([1, -1]), cs @ np.asarray([[0, 1], [1, 0]])], axis=1)[:, np.newaxis, :, :]
+    return (rot @ (xy - oldxy) + oldxy).squeeze(3)
+
+
 def rect_coords(rect, direction=(1,0)):
     x, y, l, w = rect
     xy = np.array(((x, y - w/2), (x, y + w/2), (x + l, y + w/2), (x + l, y - w/2)))

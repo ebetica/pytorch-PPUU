@@ -23,6 +23,7 @@ class DataLoader:
             self.actions = []
             self.costs = []
             self.states = []
+            self.raw_states = []
             self.ids = []
             self.ego_car_images = []
             for df in data_files:
@@ -34,6 +35,7 @@ class DataLoader:
                     self.actions += data.get('actions')
                     self.costs += data.get('costs')
                     self.states += data.get('states')
+                    self.raw_states += data.get('raw_states')
                     self.ids += data.get('ids')
                     self.ego_car_images += data.get('ego_car')
                 else:
@@ -42,6 +44,7 @@ class DataLoader:
                     actions = []
                     costs = []
                     states = []
+                    raw_states = []
                     ids = glob.glob(f'{data_dir}/{df}/car*.pkl')
                     ids.sort()
                     ego_car_images = []
@@ -60,6 +63,7 @@ class DataLoader:
                             fd.get('lane_cost')[:Ta].view(-1, 1),
                         ), 1),)
                         states.append(fd['states'])
+                        raw_states.append(fd['raw_states'])
                         ego_car_images.append(fd['ego_car'])
 
                     print(f'Saving {combined_data_path} to disk')
@@ -68,6 +72,7 @@ class DataLoader:
                         'actions': actions,
                         'costs': costs,
                         'states': states,
+                        'raw_states': raw_states,
                         'ids': ids,
                         'ego_car': ego_car_images,
                     }, combined_data_path)
@@ -75,6 +80,7 @@ class DataLoader:
                     self.actions += actions
                     self.costs += costs
                     self.states += states
+                    self.raw_states += raw_states
                     self.ids += ids
                     self.ego_car_images += ego_car_images
         else:

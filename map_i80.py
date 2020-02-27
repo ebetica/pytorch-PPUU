@@ -12,6 +12,7 @@ import numpy as np
 import pdb, random
 import bisect
 import pdb, pickle, os, re
+from tqdm import tqdm
 
 # Conversion LANE_W from real world to pixels
 # A US highway lane width is 3.7 metres, here 50 pixels
@@ -31,6 +32,7 @@ class I80Car(Car):
     max_b = 0.01
 
     def __init__(self, df, y_offset, look_ahead, screen_w, font=None, kernel=0, dt=1/10):
+        # XXXXX: Zeming says why doesn't this constructor inherit from Car? e.g. call super().__init__()???
         k = kernel  # running window size
         self._length = df.at[df.index[0], 'Vehicle Length'] * FOOT * SCALE
         self._width = df.at[df.index[0], 'Vehicle Width'] * FOOT * SCALE
@@ -58,6 +60,7 @@ class I80Car(Car):
         self._braked = False
         self.off_screen = self._max_t <= 0
         self._states = list()
+        self._raw_states = list()
         self._states_image = list()
         self._ego_car_image = None
         self._actions = list()
@@ -236,6 +239,7 @@ class I80(Simulator):
         self.episode = 0
         self.train_indx = None
         self.indx_order = None
+        self.pbar = None
 
     def _get_data_frame(self, time_slot, x_max, x_offset):
         if time_slot in self.cached_data_frames:
@@ -311,6 +315,10 @@ class I80(Simulator):
         self._t_slot = self._time_slots[time_slot] if time_slot is not None else self.random.choice(self._time_slots)
         self.df = self._get_data_frame(self._t_slot, self.screen_size[0], self.X_OFFSET)
         self.max_frame = max(self.df['Frame ID'])
+        if self.show_frame_count:
+            if self.pbar is not None:
+                self.pbar.close()
+            self.pbar = tqdm(total = self.max_frame)
         if vehicle_id: frame = self._get_first_frame(vehicle_id)
         if frame is None:  # controlled
             # Start at a random valid (new_vehicles is not empty) initial frame
@@ -394,7 +402,7 @@ class I80(Simulator):
 
         self.lane_occupancy = [[] for _ in range(7)]
         if self.show_frame_count:
-            print(f'\r[t={self.frame}]', end='')
+            self.pbar.update()
 
         for v in self.vehicles[:]:
             if v.off_screen:

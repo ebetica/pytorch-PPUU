@@ -10,10 +10,12 @@ import sys, pickle
 # from skimage import measure, transform
 # from matplotlib.image import imsave
 import PIL
-from custom_graphics import draw_dashed_line, draw_text, draw_rect, rect_coords
+from custom_graphics import draw_dashed_line, draw_text, draw_rect, rect_coords, batch_rect_coords
 from gym import core, spaces
 import os
 from imageio import imwrite
+import utils
+from collections import OrderedDict
 
 # from skimage.transform import rescale
 from PIL import ImageShow
@@ -34,7 +36,7 @@ SCALE = LANE_W / 3.7  # pixels per metre
 
 STATE_C = 3
 STATE_H, STATE_W = 117, 24
-STATE_D = 8
+STATE_D = 4
 
 colours = {
     'w': (255, 255, 255),
@@ -112,6 +114,7 @@ class Car:
         self.crashed = False
         self._error = 0
         self._states = list()
+        self._raw_states = list()
         self._states_image = list()
         self._states_coords = list()
         self._ego_car_image = None
@@ -138,10 +141,6 @@ class Car:
         state[1] = self._position[1]  # y
         state[2] = self._direction[0] * self._speed  # dx/dt
         state[3] = self._direction[1] * self._speed  # dy/dt
-        state[4] = self._direction[0] # direction x
-        state[5] = self._direction[1] # direction y
-        state[6] = self._length
-        state[7] = self._width
         return state
 
     def compute_cost(self, other):
@@ -233,8 +232,10 @@ class Car:
         return obs, mask, cost
 
     def get_coords(self, offset=0):
-        from itertools import chain
-        return (*(self._position + offset), self._length, self._width, *self._direction)
+        return (*(self._position + offset), self._length, self._width, *self._direction, *(self._speed * self._direction))
+
+    def get_null_coords(self):
+        return [0] * 8
 
     def draw(self, surface, mode='human', offset=0):
         """
@@ -452,7 +453,16 @@ class Car:
         if state[2][1] and (state[2][1] - self)[0] < self.safe_distance: return False
         return True
 
-    def _get_observation_image(self, m, screen_surface, width_height, scale, global_frame, all_car_coords):
+    def __ego_transform(self, position, scale, crop, offset):
+        return image_to_ego_coord_transform(
+            position,
+            self._direction,
+            self._length,
+            scale,
+            crop,
+            offset=offset)
+
+    def _get_observation_image(self, m, screen_surface, width_height, scale, global_frame, _):
         # row is a car, first is yourself, columns are:
         #   x y length width dir_x dir_y
         try:
@@ -467,15 +477,7 @@ class Car:
             self.off_screen = True  # we're off_screen
             return self._states_image[-1]  # return last state
 
-        def __ego_transform(position, scale, crop):
-            return image_to_ego_coord_transform(
-                position,
-                self._direction,
-                self._length,
-                scale,
-                crop,
-                offset=m)
-        transform = __ego_transform(self._position, scale, [width_height[0] * scale, width_height[1] * scale])
+        transform = self.__ego_transform(self._position, scale, [width_height[0] * scale, width_height[1] * scale], m)
         # For computational efficiency, we first crop the pygame image...
         # I don't know why but it's super slow to convert from pygame to PIL
         w, h = width_height[1] * scale, width_height[0] * scale
@@ -487,7 +489,7 @@ class Car:
         subsurface = screen_surface.subsurface(pygame.Rect(upper_left, wh))
 
         def ego_transform(scale, crop):
-            return __ego_transform(self._position - upper_left, scale, crop)
+            return self.__ego_transform(self._position - upper_left, scale, crop, m)
 
         transform = ego_transform(scale, [width_height[0] * scale, width_height[1] * scale])
 
@@ -552,14 +554,44 @@ class Car:
         # return state_image, lane_cost, proximity_cost, frame
         return torch.from_numpy(np.asarray(im)).clone(), lane_cost, proximity_cost, global_frame
 
+    def _get_observation_raw(self, m, _, width_height, scale, _2, all_car_coords):
+        # Check get_coords, all_car_coords are:
+        # x, y, length, width, dir_x, dir_y, vel_x, vel_y
+        assert type(all_car_coords) == OrderedDict, "Can't have a normal dict here"
+        transform = self.__ego_transform(self._position, scale, [width_height[0] * scale, width_height[1] * scale], m)
+        coords_numpy = np.asarray(list(all_car_coords.values()))
+
+        position = transform.apply(coords_numpy[:, 0:2])
+        # Sanity check:
+        tbb = np.asarray(width_height[::-1]) * scale # We transpose in the coordinate transform
+        assert np.allclose(position[0], tbb, 0.5), f'ego car is not centered - {position[0]} vs it should be at {width_height}'
+        # XXX This may not be correct if we scale different dimensions differently actually,
+        # but since that isn't the case let's just hack it.
+        # The real solution would be to transform the length vector and width vector seperately.
+        length_width = transform.apply_scale(coords_numpy[:, 2:4])
+        direction = transform.apply_rotation(coords_numpy[:, 4:6])
+        # After we scale and transform the velocity, gotta subtract the egocentric coordinates.
+        velocity = transform.apply_scale(coords_numpy[:, 6:8])
+        velocity = transform.apply_rotation(velocity)
+        velocity = velocity - velocity[np.newaxis,0,:]
+
+        rect_coords = batch_rect_coords(np.concatenate([position, length_width, direction], axis=1))
+        in_frame = ((rect_coords >= 0) * (rect_coords <= tbb)).all(axis=-1).any(axis=-1, keepdims=True)
+
+        ids = list(all_car_coords.keys())
+        coords = torch.from_numpy(np.concatenate([position, length_width, direction, velocity, in_frame], axis=1))
+
+        return ids, coords
+
+
     def store(self, object_name, object_):
         if object_name == 'action':
             self._actions.append(torch.Tensor(object_))
         elif object_name == 'state':
             self._states.append(self._get_obs(*object_))
         elif object_name == 'state_image':
-            image = self._get_observation_image(*object_)
-            self._states_image.append(image)
+            self._states_image.append(self._get_observation_image(*object_))
+            self._raw_states.append(self._get_observation_raw(*object_))
         elif object_name == 'ego_car_image' and self._ego_car_image is None:
             self._ego_car_image = self._get_observation_image(*object_)[0]
 
@@ -634,6 +666,7 @@ class Car:
                     'lane_cost': lane_cost,
                     'pixel_proximity_cost': pixel_proximity_cost,
                     'states': states,
+                    'raw_states': utils.collate_dense_tensors(self._raw_states),
                     'proximity_cost': proximity_cost,
                     'mask': mask,
                     'frames': frames,
@@ -1014,11 +1047,12 @@ class Simulator(core.Env):
                 if (self.store or v.is_controlled) and v.valid:
                     # For every vehicle we want to extract the state, start with a black surface
                     vehicle_surface.fill((0, 0, 0))
-                    vehicle_coords = [v.get_coords(max_extension)]
+                    vehicle_coords = OrderedDict()
+                    vehicle_coords[v.id] = v.get_coords(max_extension)
                     # Draw all the other vehicles (in green)
                     for vv in set(self.vehicles) - {v}:
                         vv.draw(vehicle_surface, mode=mode, offset=max_extension)
-                        vehicle_coords.append(vv.get_coords(max_extension))
+                        vehicle_coords[vv.id] = vv.get_coords(max_extension)
                     v.draw(vehicle_surface, mode=mode, offset=max_extension)
                     # Superimpose the lanes
                     vehicle_surface.blit(lane_surface, (0, 0), special_flags=pygame.BLEND_MAX)
@@ -1131,9 +1165,16 @@ class Transformation:
     def apply_rotation(self, x: np.ndarray):
         assert x.shape[1] == 2
         assert x.ndim == 2
-        rotation_mat = self._T[:2, :2].copy()
-        rotation_mat /= scipy.linalg.norm(rotation_mat, axis=1, keepdims=True)
-        return x @ rotation_mat.T
+        t = self._T[:2, :2].copy()
+        t /= scipy.linalg.norm(t, axis=1, keepdims=True)
+        return x @ t.T
+
+    def apply_scale(self, x: np.ndarray):
+        assert x.shape[1] == 2
+        assert x.ndim == 2
+        scaling = self._T[:2, :2].copy()
+        scaling = scipy.linalg.norm(scaling, axis=1, keepdims=True) * np.eye(2)
+        return x @ scaling.T
 
     def get_matrix(self):
         return self._T.copy()
