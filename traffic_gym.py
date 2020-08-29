@@ -579,9 +579,9 @@ class Car:
         in_frame = ((rect_coords >= 0) * (rect_coords <= tbb)).all(axis=-1).any(axis=-1, keepdims=True)
 
         ids = list(all_car_coords.keys())
-        coords = torch.from_numpy(np.concatenate([position, length_width, direction, velocity, in_frame], axis=1))
+        states = torch.from_numpy(np.concatenate([position, length_width, direction, velocity, in_frame], axis=1))
 
-        return ids, coords
+        return ids, states
 
 
     def store(self, object_name, object_):
@@ -666,7 +666,7 @@ class Car:
                     'lane_cost': lane_cost,
                     'pixel_proximity_cost': pixel_proximity_cost,
                     'states': states,
-                    'raw_states': utils.collate_dense_tensors(self._raw_states),
+                    'raw_states': self._raw_states,
                     'proximity_cost': proximity_cost,
                     'mask': mask,
                     'frames': frames,
